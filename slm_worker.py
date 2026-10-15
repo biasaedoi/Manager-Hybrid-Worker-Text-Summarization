@@ -63,7 +63,7 @@ def summarize_with_slm(text):
 
             options={
                 "temperature": 0.2,
-                "num_predict": 250
+                "num_predict": 1024
             }
         )
 

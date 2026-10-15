@@ -1,7 +1,7 @@
 from datasets import load_dataset
 
 
-def load_bigpatent_sample(n=53, start=0):
+def load_bigpatent_sample(n=50, start=0):
     dataset = load_dataset(
         "NortheasternUniversity/big_patent",
         "all",
