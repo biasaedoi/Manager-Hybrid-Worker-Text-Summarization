@@ -18,16 +18,15 @@ if not OPENAI_API_KEY:
     )
 
 client = OpenAI(
-    api_key=OPENAI_API_KEY
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENAI_API_KEY,
 )
 
-MODEL = "deepseek-v3"
+MODEL = "deepseek/deepseek-chat"
 
 
 # =========================================================
 # PRICING
-#
-# Replace these using the pricing used in your experiment.
 # =========================================================
 
 PRICE_INPUT_PER_1M = 0.2574

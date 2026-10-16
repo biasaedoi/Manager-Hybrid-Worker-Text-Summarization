@@ -14,17 +14,16 @@ from evaluate import evaluate_summary, compression_ratio
 # CONFIGURATION
 # =========================================================
 
-# Ambil 50 dokumen
 NUM_DOCUMENTS = 50
 START_INDEX = 0
 
-# Pilihan mode:
+# MODE CHOICES:
 # "FULL_SLM"
 # "FULL_LLM"
 # "HYBRID"
 
 MODES = [
-    "FULL_SLM"
+    "HYBRID"
 ]
 
 
@@ -33,38 +32,23 @@ MODES = [
 # =========================================================
 
 def safe_mean(values):
-    values = [
-        v for v in values
-        if v is not None
-    ]
-
+    values = [v for v in values if v is not None]
     if not values:
         return None
-
     return statistics.mean(values)
 
 
 def safe_median(values):
-    values = [
-        v for v in values
-        if v is not None
-    ]
-
+    values = [v for v in values if v is not None]
     if not values:
         return None
-
     return statistics.median(values)
 
 
 def safe_sum(values):
-    values = [
-        v for v in values
-        if v is not None
-    ]
-
+    values = [v for v in values if v is not None]
     if not values:
         return 0
-
     return sum(values)
 
 
@@ -79,12 +63,37 @@ def save_results_to_csv(results, mode):
         f"results_{mode.lower()}.csv"
     )
 
-    # Gabungkan semua kolom yang tersedia pada hasil eksperimen.
-    fieldnames = list(dict.fromkeys(
+    # Urutan fieldnames standar sesuai template kolom terstruktur
+    standard_fields = [
+        "document",
+        "mode",
+        "summary",
+        "rouge_1",
+        "rouge_l",
+        "bertscore",
+        "bge_m3",
+        "compression",
+        "ttft",
+        "tpot",
+        "total_latency",
+        "prompt_tokens",
+        "output_tokens",
+        "cost",
+        "total_chunks",
+        "slm_chunks",
+        "llm_chunks",
+        "slm_ratio",
+        "llm_ratio",
+        "slm_compression_ratio"
+    ]
+
+    # Gabungkan dengan kunci lain jika ada tambahan dinamis
+    all_keys = list(dict.fromkeys(
         key
         for result in results
         for key in result.keys()
     ))
+    fieldnames = [f for f in standard_fields if f in all_keys] + [k for k in all_keys if k not in standard_fields]
 
     with open(
         filename,
@@ -104,16 +113,11 @@ def save_results_to_csv(results, mode):
     print(f"[CSV] Results saved to: {filename}")
 
 
-
 # =========================================================
 # EXPERIMENT
 # =========================================================
 
 def run_experiment():
-
-    # -----------------------------------------------------
-    # LOAD DATASET
-    # -----------------------------------------------------
 
     samples = load_bigpatent_sample(
         n=NUM_DOCUMENTS,
@@ -126,20 +130,16 @@ def run_experiment():
     print("=" * 70)
 
     print(
-        f"Dataset range    : "
+        f"Dataset range     : "
         f"{START_INDEX + 1}-{START_INDEX + len(samples)}"
     )
 
     print(
-        f"Loaded samples   : "
+        f"Loaded samples    : "
         f"{len(samples)}"
     )
 
     print("=" * 70)
-
-    # -----------------------------------------------------
-    # SELECT DOCUMENTS
-    # -----------------------------------------------------
 
     selected_samples = []
 
@@ -161,10 +161,6 @@ def run_experiment():
 
     print("=" * 70)
 
-    # -----------------------------------------------------
-    # RUN MODES
-    # -----------------------------------------------------
-
     for mode in MODES:
 
         print("\n")
@@ -175,10 +171,6 @@ def run_experiment():
         print("=" * 70)
 
         results = []
-
-        # =================================================
-        # DOCUMENT LOOP
-        # =================================================
 
         for experiment_index, (
             actual_index,
@@ -242,6 +234,7 @@ def run_experiment():
                 )
 
                 result = {
+                    "document": actual_index,
                     "mode": mode,
                     "summary": summary,
                     "ttft": output.get("ttft"),
@@ -250,7 +243,7 @@ def run_experiment():
                     "prompt_tokens": output.get(
                         "prompt_tokens"
                     ),
-                    "completion_tokens": output.get(
+                    "output_tokens": output.get(
                         "completion_tokens"
                     ),
                     "cost": output.get(
@@ -307,6 +300,7 @@ def run_experiment():
                 )
 
                 result = {
+                    "document": actual_index,
                     "mode": mode,
                     "summary": summary,
                     "ttft": output.get("ttft"),
@@ -315,7 +309,7 @@ def run_experiment():
                     "prompt_tokens": output.get(
                         "prompt_tokens"
                     ),
-                    "completion_tokens": output.get(
+                    "output_tokens": output.get(
                         "completion_tokens"
                     ),
                     "cost": output.get(
@@ -372,16 +366,19 @@ def run_experiment():
 
                 summary = output["summary"]
 
+                # Mapping key completion_tokens ke output_tokens jika ada di output pipeline
+                if "completion_tokens" in output and "output_tokens" not in output:
+                    output["output_tokens"] = output.pop("completion_tokens")
+
                 result = {
+                    "document": actual_index,
                     "mode": mode,
                     **output
                 }
 
                 print("\nROUTING:")
 
-                for routing in output[
-                    "routing_results"
-                ]:
+                for routing in output.get("routing_results", []):
                     print(
                         f"Chunk "
                         f"{routing['chunk']:>2} | "
@@ -398,55 +395,10 @@ def run_experiment():
 
                 print()
 
-                print(
-                    f"Total Chunks     : "
-                    f"{output['total_chunks']}"
-                )
-
-                print(
-                    f"SLM Chunks       : "
-                    f"{output['slm_chunks']}"
-                )
-
-                print(
-                    f"LLM Chunks       : "
-                    f"{output['llm_chunks']}"
-                )
-
-                print(
-                    f"SLM Ratio        : "
-                    f"{output['slm_ratio']:.2%}"
-                )
-
-                print(
-                    f"LLM Ratio        : "
-                    f"{output['llm_ratio']:.2%}"
-                )
-
-                print(
-                    f"Original Words   : "
-                    f"{output['original_words']}"
-                )
-
-                print(
-                    f"Final LLM Words  : "
-                    f"{output['hybrid_input_words']}"
-                )
-
-                print(
-                    f"SLM Compression  : "
-                    f"{output['slm_compression_ratio']:.2%}"
-                )
-
-            # =================================================
-            # INVALID MODE
-            # =================================================
-
             else:
                 print(
                     f"Unknown mode: {mode}"
                 )
-
                 return
 
             # =================================================
@@ -454,48 +406,6 @@ def run_experiment():
             # =================================================
 
             print("\n[EVALUATION DEBUG]")
-
-            print(
-                "Summary type   :",
-                type(summary)
-            )
-
-            print(
-                "Summary length :",
-                len(summary)
-                if summary
-                else 0
-            )
-
-            print(
-                "Summary start  :",
-                repr(summary[:100])
-                if summary
-                else None
-            )
-
-            print(
-                "Reference type :",
-                type(reference)
-            )
-
-            print(
-                "Reference len  :",
-                len(reference)
-                if reference
-                else 0
-            )
-
-            print(
-                "Reference start:",
-                repr(reference[:100])
-                if reference
-                else None
-            )
-
-            # -------------------------------------------------
-            # RUN EVALUATION
-            # -------------------------------------------------
 
             try:
                 evaluation = evaluate_summary(
@@ -523,23 +433,12 @@ def run_experiment():
 
                 compression = None
 
-            # -------------------------------------------------
-            # STORE EVALUATION
-            # -------------------------------------------------
-
+            # Menyimpan dengan nama kolom sesuai template template (rouge_1, rouge_l, bertscore, bge_m3)
             result.update({
-                "rouge1": evaluation.get(
-                    "ROUGE1"
-                ),
-                "rougeL": evaluation.get(
-                    "ROUGEL"
-                ),
-                "bert_score": evaluation.get(
-                    "BERTScore"
-                ),
-                "bge_m3": evaluation.get(
-                    "BGE_M3"
-                ),
+                "rouge_1": evaluation.get("ROUGE1"),
+                "rouge_l": evaluation.get("ROUGEL"),
+                "bertscore": evaluation.get("BERTScore"),
+                "bge_m3": evaluation.get("BGE_M3"),
                 "compression": compression
             })
 
@@ -560,17 +459,17 @@ def run_experiment():
 
             print(
                 f"ROUGE-1          : "
-                f"{result['rouge1']}"
+                f"{result['rouge_1']}"
             )
 
             print(
                 f"ROUGE-L          : "
-                f"{result['rougeL']}"
+                f"{result['rouge_l']}"
             )
 
             print(
                 f"BERTScore        : "
-                f"{result['bert_score']}"
+                f"{result['bertscore']}"
             )
 
             print(
@@ -585,32 +484,32 @@ def run_experiment():
 
             print(
                 f"TTFT             : "
-                f"{result['ttft']}"
+                f"{result.get('ttft')}"
             )
 
             print(
                 f"TPOT             : "
-                f"{result['tpot']}"
+                f"{result.get('tpot')}"
             )
 
             print(
                 f"Total Latency    : "
-                f"{result['total_latency']}"
+                f"{result.get('total_latency')}"
             )
 
             print(
                 f"Prompt Tokens    : "
-                f"{result['prompt_tokens']}"
+                f"{result.get('prompt_tokens')}"
             )
 
             print(
                 f"Output Tokens    : "
-                f"{result['completion_tokens']}"
+                f"{result.get('output_tokens')}"
             )
 
             print(
                 f"Cost             : "
-                f"${result['cost']}"
+                f"${result.get('cost')}"
             )
 
             print("\nSUMMARY:")
@@ -632,26 +531,22 @@ def run_experiment():
             f"{len(results)}"
         )
 
-        # =====================================================
-        # QUALITY
-        # =====================================================
-
         print(
             "\n========== QUALITY =========="
         )
 
         rouge1_values = [
-            r["rouge1"]
+            r["rouge_1"]
             for r in results
         ]
 
         rougeL_values = [
-            r["rougeL"]
+            r["rouge_l"]
             for r in results
         ]
 
         bert_values = [
-            r["bert_score"]
+            r["bertscore"]
             for r in results
         ]
 
@@ -710,198 +605,11 @@ def run_experiment():
             safe_mean(compression_values)
         )
 
-        # =====================================================
-        # LATENCY
-        # =====================================================
-
-        print(
-            "\n========== LATENCY =========="
-        )
-
-        ttft_values = [
-            r["ttft"]
-            for r in results
-        ]
-
-        tpot_values = [
-            r["tpot"]
-            for r in results
-        ]
-
-        latency_values = [
-            r["total_latency"]
-            for r in results
-        ]
-
-        print(
-            "TTFT mean       :",
-            safe_mean(ttft_values)
-        )
-
-        print(
-            "TTFT median     :",
-            safe_median(ttft_values)
-        )
-
-        print(
-            "TPOT mean       :",
-            safe_mean(tpot_values)
-        )
-
-        print(
-            "TPOT median     :",
-            safe_median(tpot_values)
-        )
-
-        print(
-            "Latency mean    :",
-            safe_mean(latency_values)
-        )
-
-        print(
-            "Latency median  :",
-            safe_median(latency_values)
-        )
-
-        # =====================================================
-        # TOKENS
-        # =====================================================
-
-        print(
-            "\n========== TOKENS =========="
-        )
-
-        prompt_values = [
-            r["prompt_tokens"]
-            for r in results
-        ]
-
-        output_values = [
-            r["completion_tokens"]
-            for r in results
-        ]
-
-        print(
-            "Prompt Tokens mean   :",
-            safe_mean(prompt_values)
-        )
-
-        print(
-            "Prompt Tokens median :",
-            safe_median(prompt_values)
-        )
-
-        print(
-            "Output Tokens mean   :",
-            safe_mean(output_values)
-        )
-
-        print(
-            "Output Tokens median :",
-            safe_median(output_values)
-        )
-
-        # =====================================================
-        # COST
-        # =====================================================
-
-        print(
-            "\n========== COST =========="
-        )
-
-        cost_values = [
-            r["cost"]
-            for r in results
-        ]
-
-        print(
-            "Cost mean       : $",
-            safe_mean(cost_values)
-        )
-
-        print(
-            "Cost median     : $",
-            safe_median(cost_values)
-        )
-
-        print(
-            "Total Cost      : $",
-            safe_sum(cost_values)
-        )
-
-        # =====================================================
-        # HYBRID ONLY
-        # =====================================================
-
-        if mode == "HYBRID":
-
-            print(
-                "\n========== ROUTING =========="
-            )
-
-            total_chunks = sum(
-                r["total_chunks"]
-                for r in results
-            )
-
-            total_slm = sum(
-                r["slm_chunks"]
-                for r in results
-            )
-
-            total_llm = sum(
-                r["llm_chunks"]
-                for r in results
-            )
-
-            print(
-                "Total Chunks    :",
-                total_chunks
-            )
-
-            print(
-                "SLM Chunks      :",
-                total_slm
-            )
-
-            print(
-                "LLM Chunks      :",
-                total_llm
-            )
-
-            if total_chunks > 0:
-
-                print(
-                    "SLM Percentage :",
-                    f"{total_slm / total_chunks:.2%}"
-                )
-
-                print(
-                    "LLM Percentage :",
-                    f"{total_llm / total_chunks:.2%}"
-                )
-
-            slm_compressions = [
-                r["slm_compression_ratio"]
-                for r in results
-            ]
-
-            print(
-                "SLM Compression :",
-                safe_mean(
-                    slm_compressions
-                )
-            )
-
         save_results_to_csv(
             results,
             mode
         )
 
-
-# =========================================================
-# MAIN
-# =========================================================
 
 if __name__ == "__main__":
     run_experiment()

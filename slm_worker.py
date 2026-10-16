@@ -2,7 +2,7 @@ import time
 import ollama
 
 
-MODEL = "qwen2.5:3b"
+MODEL = "qwen2.5:0.5b"
 
 
 SYSTEM_PROMPT = """
