@@ -13,9 +13,10 @@ from evaluate import evaluate_summary, compression_ratio
 # =========================================================
 # CONFIGURATION
 # =========================================================
-
-NUM_DOCUMENTS = 50
-START_INDEX = 0
+# 454
+# 5
+NUM_DOCUMENTS = 356
+START_INDEX = 144
 
 # MODE CHOICES:
 # "FULL_SLM"
@@ -23,7 +24,7 @@ START_INDEX = 0
 # "HYBRID"
 
 MODES = [
-    "HYBRID"
+    "FULL_SLM"
 ]
 
 
@@ -444,6 +445,10 @@ def run_experiment():
 
             results.append(
                 result
+            )
+            save_results_to_csv(
+                results,
+                mode
             )
 
             # =================================================

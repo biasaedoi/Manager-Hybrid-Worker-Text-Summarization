@@ -4,33 +4,94 @@ import time
 from openai import OpenAI
 from dotenv import load_dotenv
 
+from prompts import (
+    build_full_prompt,
+    build_hybrid_prompt,
+    max_output_tokens
+)
+
 load_dotenv()
 
 # =========================================================
 # API CONFIGURATION
 # =========================================================
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+def _load_api_keys():
 
-if not OPENAI_API_KEY:
-    raise ValueError(
-        "OPENAI_API_KEY is not set in .env"
+    configured_keys = []
+
+    api_keys = os.getenv("ANOMAN_API_KEYS", "")
+    configured_keys.extend(
+        key.strip()
+        for key in api_keys.replace(";", ",").split(",")
+        if key.strip()
     )
 
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENAI_API_KEY,
-)
+    primary_key = os.getenv("ANOMAN_API_KEY")
 
-MODEL = "deepseek/deepseek-chat"
+    if primary_key:
+        configured_keys.insert(0, primary_key.strip())
+
+    numbered_keys = []
+    key_index = 1
+
+    while True:
+
+        numbered_key = os.getenv(
+            f"ANOMAN_API_KEY_{key_index}"
+        )
+
+        if numbered_key:
+            numbered_keys.append(numbered_key.strip())
+
+        elif key_index > 1:
+            break
+
+        key_index += 1
+
+    configured_keys.extend(numbered_keys)
+
+    unique_keys = []
+
+    for key in configured_keys:
+
+        if key and key not in unique_keys:
+            unique_keys.append(key)
+
+    return unique_keys
+
+
+ANOMAN_API_KEYS = _load_api_keys()
+
+if not ANOMAN_API_KEYS:
+    raise ValueError(
+        "Set ANOMAN_API_KEY, ANOMAN_API_KEYS, or "
+        "ANOMAN_API_KEY_1 in .env"
+    )
+
+clients = [
+    OpenAI(
+        base_url="https://api.anoman.io/v1",
+        api_key=api_key,
+    )
+    for api_key in ANOMAN_API_KEYS
+]
+
+# Keep the original name available for callers that import it.
+client = clients[0]
+
+MODEL = os.getenv(
+    "ANOMAN_MODEL",
+    "deepseek-v3"
+)
 
 
 # =========================================================
 # PRICING
 # =========================================================
 
-PRICE_INPUT_PER_1M = 0.2574
-PRICE_OUTPUT_PER_1M = 1.029
+PRICE_INPUT_PER_1M = 0.14
+PRICE_OUTPUT_PER_1M = 0.29
 
 
 def calc_cost(
@@ -63,198 +124,156 @@ def calc_cost(
 # GENERIC STREAMING API CALL
 # =========================================================
 
-def _call_llm(system_prompt, user_prompt):
+def _call_llm(system_prompt, user_prompt, max_tokens=None):
 
-    start_time = time.perf_counter()
+    request_start = time.perf_counter()
+    errors = []
 
-    first_token_time = None
+    for api_index, api_client in enumerate(clients, start=1):
 
-    generated_text = ""
+        attempt_start = time.perf_counter()
+        first_token_time = None
+        generated_text = ""
+        prompt_tokens = None
+        completion_tokens = None
 
-    prompt_tokens = None
-    completion_tokens = None
+        try:
 
-    try:
-
-        stream = client.chat.completions.create(
-
-            model=MODEL,
-
-            messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt
+            stream = api_client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt
+                    }
+                ],
+                temperature=0.2,
+                max_tokens=max_tokens,
+                stream=True,
+                stream_options={
+                    "include_usage": True
                 }
-            ],
+            )
 
-            temperature=0.2,
+            for chunk in stream:
 
-            stream=True,
+                now = time.perf_counter()
 
-            stream_options={
-                "include_usage": True
-            }
-        )
+                if chunk.choices:
 
-        for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    content = getattr(
+                        delta,
+                        "content",
+                        None
+                    )
 
-            now = time.perf_counter()
+                    if content:
 
-            # ==============================
-            # TEXT
-            # ==============================
+                        if first_token_time is None:
+                            first_token_time = now
 
-            if chunk.choices:
+                        generated_text += content
 
-                delta = chunk.choices[0].delta
-
-                content = getattr(
-                    delta,
-                    "content",
+                usage = getattr(
+                    chunk,
+                    "usage",
                     None
                 )
 
-                if content:
+                if usage:
 
-                    if first_token_time is None:
-                        first_token_time = now
+                    prompt_tokens = getattr(
+                        usage,
+                        "prompt_tokens",
+                        prompt_tokens
+                    )
 
-                    generated_text += content
+                    completion_tokens = getattr(
+                        usage,
+                        "completion_tokens",
+                        completion_tokens
+                    )
 
-            # ==============================
-            # TOKEN USAGE
-            # ==============================
+            if not generated_text.strip():
+                raise RuntimeError("API returned an empty summary")
 
-            usage = getattr(
-                chunk,
-                "usage",
-                None
-            )
+            end_time = time.perf_counter()
+            total_latency = end_time - request_start
 
-            if usage:
+            if first_token_time is not None:
+                ttft = first_token_time - attempt_start
+            else:
+                ttft = end_time - attempt_start
 
-                prompt_tokens = getattr(
-                    usage,
-                    "prompt_tokens",
-                    prompt_tokens
-                )
+            if (
+                first_token_time is not None
+                and completion_tokens is not None
+                and completion_tokens > 1
+            ):
 
-                completion_tokens = getattr(
-                    usage,
-                    "completion_tokens",
+                generation_time = end_time - first_token_time
+                tpot = generation_time / (completion_tokens - 1)
+
+            else:
+                tpot = None
+
+            return {
+                "summary": generated_text.strip(),
+                "ttft": ttft,
+                "tpot": tpot,
+                "total_latency": total_latency,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost": calc_cost(
+                    prompt_tokens,
                     completion_tokens
+                ),
+                "api_index": api_index
+            }
+
+        except Exception as e:
+
+            errors.append(
+                f"API {api_index} {type(e).__name__}: {e}"
+            )
+
+            if api_index < len(clients):
+                print(
+                    f"[LLM FAILOVER] API {api_index} failed; "
+                    f"trying API {api_index + 1}"
                 )
 
-        end_time = time.perf_counter()
+    print("[LLM ERROR] All configured APIs failed")
 
-        total_latency = (
-            end_time - start_time
-        )
+    for error in errors:
+        print(f"[LLM ERROR] {error}")
 
-        if first_token_time is not None:
-
-            ttft = (
-                first_token_time
-                - start_time
-            )
-
-        else:
-
-            ttft = total_latency
-
-        if (
-            first_token_time is not None
-            and completion_tokens is not None
-            and completion_tokens > 1
-        ):
-
-            generation_time = (
-                end_time
-                - first_token_time
-            )
-
-            tpot = (
-                generation_time
-                / (completion_tokens - 1)
-            )
-
-        else:
-
-            tpot = None
-
-        cost = calc_cost(
-            prompt_tokens,
-            completion_tokens
-        )
-
-        return {
-            "summary": generated_text.strip(),
-            "ttft": ttft,
-            "tpot": tpot,
-            "total_latency": total_latency,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "cost": cost
-        }
-
-    except Exception as e:
-
-        print(
-            f"[LLM ERROR] {type(e).__name__}: {e}"
-        )
-
-        return {
-            "summary": "[LLM FAILED]",
-            "ttft": None,
-            "tpot": None,
-            "total_latency": None,
-            "prompt_tokens": None,
-            "completion_tokens": None,
-            "cost": None
-        }
+    return {
+        "summary": "[LLM FAILED]",
+        "ttft": None,
+        "tpot": None,
+        "total_latency": time.perf_counter() - request_start,
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "cost": None
+    }
 
 
 # =========================================================
 # FULL LLM BASELINE
 # =========================================================
 
-FULL_LLM_SYSTEM_PROMPT = """
-You are a lightweight summarization worker.
-
-Summarize the provided section of a patent document concisely.
-
-Preserve the most important:
-- technical concepts
-- components
-- processes
-- inventions
-- relationships
-- important facts and numbers
-
-The summary will later be used by another model to understand
-this section of the original document.
-
-Do not invent information.
-Do not add explanations.
-Do not repeat information.
-Do not use bullet points.
-Do not mention that this is a chunk or section.
-
-Write approximately 3-5 concise sentences.
-
-Output only the summary.
-"""
-
-
-def summarize_with_llm(article):
+def summarize_with_llm(article, max_words=250):
 
     return _call_llm(
-        FULL_LLM_SYSTEM_PROMPT,
-        article
+        build_full_prompt(max_words),
+        article,
+        max_tokens=max_output_tokens(max_words)
     )
 
 
@@ -262,57 +281,10 @@ def summarize_with_llm(article):
 # HYBRID FINAL SYNTHESIS
 # =========================================================
 
-HYBRID_SYSTEM_PROMPT = """
-You are the final summarization model in a hybrid document
-summarization system.
-
-You will receive a reconstruction of a patent document.
-
-Some parts are provided as ORIGINAL TEXT.
-Other parts are provided as COMPRESSED TEXT generated from the
-corresponding original text by a lightweight summarization model.
-
-The order of all parts follows the original document.
-
-Generate one coherent and concise summary representing the entire
-document.
-
-Treat compressed passages as representations of their corresponding
-original passages and integrate them naturally with the surrounding
-original information.
-
-Preserve:
-- the main technical problem
-- the proposed invention or solution
-- important components
-- processes and relationships
-- important technical facts
-- important numbers when relevant
-
-Do not ignore compressed passages merely because they are shorter.
-
-Do not mention:
-- chunks
-- sections
-- routing
-- compression
-- SLM
-- LLM
-- models
-
-Do not invent information.
-Do not repeat information.
-Do not use bullet points.
-
-Output only the final summary.
-"""
-
-
-def summarize_hybrid_with_llm(
-    hybrid_context
-):
+def summarize_hybrid_with_llm(hybrid_context, max_words=250):
 
     return _call_llm(
-        HYBRID_SYSTEM_PROMPT,
-        hybrid_context
+        build_hybrid_prompt(max_words),
+        hybrid_context,
+        max_tokens=max_output_tokens(max_words)
     )

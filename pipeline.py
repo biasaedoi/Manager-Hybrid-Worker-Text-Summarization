@@ -118,7 +118,8 @@ def run_hybrid_pipeline(article):
 
             slm_result = (
                 summarize_with_slm(
-                    chunk
+                    chunk,
+                    is_chunk=True
                 )
             )
 
